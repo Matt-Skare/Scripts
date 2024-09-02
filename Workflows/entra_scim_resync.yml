@@ -1,0 +1,74 @@
+# EntraID Application Restart Github Action Invocation
+
+name: entra-app-aws-restart
+
+env:
+  CLIENT_ID: "CLIENT_ID"
+  TENANT_ID: "TENANT_ID"
+  AWS: "SyncronizationJob"
+  servicePrincipalId: "APP_ID/CLIENT_ID"
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # Runs every 5mins. Shortest allowed value for GitHub Actions  
+  workflow_dispatch:
+    inputs:
+      entraid_action:
+        description: 'AWS Sync'     
+        required: true
+        default: 'execute'
+        type: choice
+        options:
+          - execute
+      environment:
+        description: 'Environment'
+        required: true
+        default: 'prod'
+        type: choice
+        options:
+          - prod
+  
+permissions:
+      id-token: write
+      contents: write
+
+jobs:
+
+  EntraID-AWS-App-Restart:
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: PowerShell - EntraID AWS App Restart
+      uses: azure/powershell@v2
+      with:
+        azPSVersion: "latest"
+        inlineScript: |
+          echo "Installing Microsoft.Graph.Beta.Applications Module"
+          Install-Module Microsoft.Graph.Beta.Applications -Confirm:$false -Force
+          echo "Importing Microsoft.Graph.Beta Module"
+          Import-Module Microsoft.Graph.Beta.Applications
+          echo "Authenticating with Microsoft Graph"
+          $clientid = "${{ env.CLIENT_ID }}"
+          $tenantid = "${{ env.TENANT_ID}}"
+          $secret = "${{ secrets.ENTRA_TERRAFORM_CLIENT_SECRET }}"
+          $body =  @{
+              Grant_Type    = "client_credentials"
+              Scope         = "https://graph.microsoft.com/.default"
+              Client_Id     = $clientid
+              Client_Secret = $secret
+          }
+          $connection = Invoke-RestMethod `
+              -Uri https://login.microsoftonline.com/$tenantid/oauth2/v2.0/token `
+              -Method POST `
+              -Body $body
+          $connection | ConvertTo-Json
+          $token = ($connection.access_token | ConvertTo-SecureString -AsPlainText -Force)
+          Connect-MgGraph -AccessToken $token
+          echo "Pausing AWS Application"
+          Suspend-MgBetaServicePrincipalSynchronizationJob -ServicePrincipalId ${{ env.servicePrincipalId }} -SynchronizationJobId ${{ env.AWS }}
+          echo "Waiting 10 seconds"
+          Start-Sleep -Seconds 10
+          echo "Starting AWS Application"
+          Start-MgBetaServicePrincipalSynchronizationJob -ServicePrincipalId ${{ env.servicePrincipalId }} -SynchronizationJobId ${{ env.AWS }}
+          echo "Disconnecting from Microsoft Graph"
+          Disconnect-MgGraph
